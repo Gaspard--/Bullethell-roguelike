@@ -30,13 +30,24 @@ public:
 
   void printTile(Position const &pos, int ch) const noexcept
   {
-    mvaddch(pos[1], pos[0] * 2, ch);
+    mvaddch(pos[1] + 1, pos[0] * 2, ch);
   }
 
   template<class... T>
   void printMsg(char const *fmt, T &&... more) const noexcept
   {
-    mvprintw(size * 2 + 1, 0, fmt, std::forward<T>(more)...);
+    mvprintw(size * 2 + 2, 0, fmt, std::forward<T>(more)...);
+  }
+
+  void clearMsg() const noexcept
+  {
+    move(size * 2 + 2, 0);
+    clrtoeol();
+  }
+
+  void printStats(unsigned int score, unsigned int turns)
+  {
+    mvprintw(0, 0, "SCORE: %u --- TURNS: %u", score, turns);
   }
 };
 
@@ -73,6 +84,8 @@ struct Tile
   static constexpr unsigned int empty{-1u};
 
   unsigned int entityIndex;
+  bool prelazer{false};
+  bool lazer{false};
 
   bool isEmpty() const noexcept
   {
@@ -94,6 +107,7 @@ struct Entity
 {
   Position pos;
   int symbol;
+  bool just_spawned{true};
   bool dead{false};
 
   auto getSymbol() const noexcept
@@ -110,45 +124,44 @@ struct Entity
 class Logic : private Display
 {
   std::unordered_map<Position, Tile> tiles;
+
   bool needsRefresh{true};
   std::deque<Entity> entities;
-  std::default_random_engine rEngine{0u};
+  std::default_random_engine rEngine{rand()};
   std::default_random_engine rSpawnEngine{0u};
+  static constexpr int LAZER_AT_PLAYER{'W' | (COLOR_GREEN << 8)};
+  static constexpr int WILL_LAZER_AT_PLAYER{'W' | (COLOR_YELLOW << 8)};
   static constexpr int WILL_WALK_TO_PLAYER{'+' | (COLOR_GREEN << 8)};
   static constexpr int WALK_TO_PLAYER{'+' | (COLOR_YELLOW << 8)};
   static constexpr int WALK_UP{'^' | (COLOR_YELLOW << 8)};
-  static constexpr int WALK_DOWN{'V' | (COLOR_YELLOW << 8)};
+  static constexpr int WALK_DOWN{'v' | (COLOR_YELLOW << 8)};
   static constexpr int WALK_LEFT{'<' | (COLOR_YELLOW << 8)};
   static constexpr int WALK_RIGHT{'>' | (COLOR_YELLOW << 8)};
   static constexpr int WILL_SHOOT_AT_PLAYER{'H' | (COLOR_GREEN << 8)};
   static constexpr int SHOOT_AT_PLAYER{'H' | (COLOR_YELLOW << 8)};
   static constexpr int PLAYER{'@' | (COLOR_YELLOW << 8)};
+  static constexpr int CHARGING_PLAYER{'@' | (COLOR_BLACK << 8)};
+  unsigned int score{0u};
+  unsigned int turns{0u};
 
   auto &getTileImpl(Position pos)
   {
     try {
       return tiles.at(pos);
-    } catch (std::out_of_range const &){
+    } catch (std::out_of_range const &) {
       auto &tile(tiles[pos]);
 
       tile.getEntityIndex() = std::uniform_int_distribution<unsigned int>(0, 4)(rEngine) ? Tile::empty : Tile::wall;
-      switch (std::uniform_int_distribution<unsigned int>(0, 420)(rEngine)) {
+      switch (std::uniform_int_distribution<unsigned int>(0, 210)(rEngine)) {
       case 5:
       	insertEntity(Entity{pos, SHOOT_AT_PLAYER});
 	break;
-      case 7:
-      	insertEntity(Entity{pos, WALK_UP});
-	break;
-      case 8:
-      	insertEntity(Entity{pos, WALK_DOWN});
-	break;
-      case 9:
-      	insertEntity(Entity{pos, WALK_LEFT});
-	break;
-      case 10:
-      	insertEntity(Entity{pos, WALK_RIGHT});
+      case 6:
+      	insertEntity(Entity{pos, WILL_LAZER_AT_PLAYER});
 	break;
       case 11:
+      case 12:
+      case 13:
       	insertEntity(Entity{pos, WALK_TO_PLAYER});
 	break;
       }
@@ -164,40 +177,42 @@ public:
 	if (i != 0 || j != 0)
 	  killTile({i, j});
   }
-  
+
   decltype(auto) getPlayerPosition() const noexcept
   {
     return entities[0].getPos();
   }
 
-  static constexpr std::chrono::milliseconds displayDelay{10};
-
   auto getTile(Position pos)
   {
     return getTileImpl(pos);
+
   }
 
   void print()
   {
     if (needsRefresh)
       {
-	std::this_thread::sleep_for(displayDelay);
         auto playerPos(getPlayerPosition());
 
 	for (unsigned int i(0u); i <= size * 2u; ++i)
 	  for (unsigned int j(0u); j <= size * 2u; ++j)
 	    {
-	      auto entityIndex(getTile({playerPos[0] + i - size, playerPos[1] + j - size}).getEntityIndex());
+	      auto const &tile(getTile({playerPos[0] + i - size, playerPos[1] + j - size}));
+	      auto entityIndex(tile.getEntityIndex());
 	      int ch;
 
 	      if (entityIndex == Tile::empty)
-		ch = '.';
+		ch = tile.prelazer ? '|' : '.';
 	      else if (entityIndex == Tile::wall)
 		ch = 'x' | (COLOR_BLUE << 8);
 	      else
 		ch = entities[entityIndex].getSymbol();
+	      if (tile.lazer)
+		ch |= A_REVERSE;
 	      printTile({i, j}, ch);
 	    }
+	printStats(score, turns);
       }
   }
 
@@ -247,6 +262,18 @@ public:
     if (entityIndex != Tile::wall && entityIndex != Tile::empty)
       {
 	entities[entityIndex].dead = true;
+	if (entities[entityIndex].symbol == WILL_LAZER_AT_PLAYER)
+	  score += 100;
+	if (entities[entityIndex].symbol == LAZER_AT_PLAYER)
+	  score += 111;
+	if (entities[entityIndex].symbol == WILL_SHOOT_AT_PLAYER)
+	  score += 100;
+	if (entities[entityIndex].symbol == SHOOT_AT_PLAYER)
+	  score += 85;
+	if (entities[entityIndex].symbol == WILL_WALK_TO_PLAYER)
+	  score += 21;
+	if (entities[entityIndex].symbol == WILL_WALK_TO_PLAYER)
+	  score += 24;
       }
     getWritableTile(dest).getEntityIndex() = Tile::empty;
   }
@@ -271,7 +298,10 @@ public:
   {
     constexpr char quit_key{'q'};
     constexpr char restart_key{'r'};
+    constexpr char shoot_key{'s'};
+    constexpr char help_key{'h'};
     int ch(getch());
+    clearMsg();
 
     if (ch == restart_key)
       {
@@ -282,17 +312,42 @@ public:
     if (ch == quit_key)
       return false;
     if (auto optional = getDir(ch))
-      action(*optional);
+      {
+	if (entities.front().symbol == CHARGING_PLAYER)
+	  {
+	    insertEntity(Entity{{entities.front().pos[0] + (*optional)[0], entities.front().pos[1] + (*optional)[1]},
+		  (*optional)[0] == 1 ? WALK_RIGHT :
+		    (*optional)[0] == static_cast<unsigned int>(-1) ? WALK_LEFT :
+		    (*optional)[1] == 1 ? WALK_DOWN :
+		    WALK_UP});
+	    entities.front().symbol = PLAYER;
+	  }
+	else
+	  action(*optional);
+      }
+    else if (ch == shoot_key)
+      entities.front().symbol = CHARGING_PLAYER;
+    else if (ch == help_key)
+      {
+	printMsg("Arrow keys to move, '%c' followed by arrow key to shoot.", shoot_key);
+	return true;
+      }
     else
-      printMsg("Unknown key '%c'. Press '%c' to quit.", ch, quit_key);
+      {
+	printMsg("Unknown key '%c'. Press '%c' to quit or '%c' for help", ch, quit_key, help_key);
+	return true;
+      }
     print();
-
-    for (size_t i(1u); i < entities.size(); ++i)
-      if (!entities[i].dead)
-	{
-	  update(i);
-	  print();
-	}
+    ++turns;
+    for (size_t i(0u); i < entities.size(); ++i)
+      {
+	if (!entities[i].dead && !entities[i].just_spawned)
+	  {
+	    update(i);
+	    print();
+	  }
+	entities[i].just_spawned = false;
+      }
     if (entities.front().dead) {
       printMsg("You died. Press '%c' to restart or '%c' to quit", restart_key, quit_key);
       while (true)
@@ -313,6 +368,11 @@ public:
     return true;
   }
 
+  void updateActiveTiles()
+  {
+    
+  }
+
   void update(size_t index)
   {
     Entity &entity(entities[index]);
@@ -324,8 +384,6 @@ public:
 		       });
     switch (entity.getSymbol())
       {
-      case PLAYER:
-	return ;
       case WILL_WALK_TO_PLAYER:
 	{
 	  entity.symbol = WALK_TO_PLAYER;
@@ -384,6 +442,52 @@ public:
 	      else
 		insertEntity(Entity{{entity.pos[0] - 1, entity.pos[1]}, WALK_LEFT});
 	    }
+	}
+	return ;
+      case WILL_LAZER_AT_PLAYER:
+	for (int dir : std::array<int, 2u>{-1, 1u})
+	  {
+	    auto pos(entity.pos);
+
+	    pos[1] += dir;
+	    while (getTile(pos).lazer)
+	      {
+		getWritableTile(pos).lazer = false;
+		pos[1] += dir;
+	      }
+	  }
+	    
+	moveTo(index, {entity.pos[0] + sign(target[0] - entity.pos[0]), entity.pos[1]});
+	if (entity.pos[0] == target[0])
+	  {
+	    int dir = sign(target[1] - entity.pos[1]);
+	    auto pos(entity.pos);
+
+	    pos[1] += dir;
+	    while (getTile(pos).entityIndex != Tile::wall)
+	      {
+		getWritableTile(pos).prelazer = true;
+		pos[1] += dir;
+	      }
+	    entity.symbol = LAZER_AT_PLAYER;
+	  }
+	return ;
+      case LAZER_AT_PLAYER:
+	{
+	  int dir = sign(target[1] - entity.pos[1]);
+	  auto pos(entity.pos);
+
+	  pos[1] += dir;
+	  while (getTile(pos).entityIndex != Tile::wall)
+	    {
+	      killTile(pos);
+	      getWritableTile(pos).prelazer = false;
+	      getWritableTile(pos).lazer = true;
+	      pos[1] += dir;
+	    }
+	  killTile(pos);
+	  entity.symbol = LAZER_AT_PLAYER;	  
+	  entity.symbol = WILL_LAZER_AT_PLAYER;
 	}
 	return ;
       }
