@@ -47,6 +47,8 @@ public:
 
   void printStats(unsigned int score, unsigned int turns)
   {
+    move(0, 0);
+    clrtoeol();
     mvprintw(0, 0, "SCORE: %u --- TURNS: %u", score, turns);
   }
 };
@@ -129,6 +131,8 @@ class Logic : private Display
   std::deque<Entity> entities;
   std::default_random_engine rEngine{rand()};
   std::default_random_engine rSpawnEngine{0u};
+  static constexpr int TARGET_AT_PLAYER{'K' | (COLOR_GREEN << 8)};
+  static constexpr int WILL_TARGET_AT_PLAYER{'K' | (COLOR_YELLOW << 8)};
   static constexpr int LAZER_AT_PLAYER{'W' | (COLOR_GREEN << 8)};
   static constexpr int WILL_LAZER_AT_PLAYER{'W' | (COLOR_YELLOW << 8)};
   static constexpr int WILL_WALK_TO_PLAYER{'+' | (COLOR_GREEN << 8)};
@@ -141,6 +145,7 @@ class Logic : private Display
   static constexpr int SHOOT_AT_PLAYER{'H' | (COLOR_YELLOW << 8)};
   static constexpr int PLAYER{'@' | (COLOR_YELLOW << 8)};
   static constexpr int CHARGING_PLAYER{'@' | (COLOR_BLACK << 8)};
+  static constexpr int LEAVE_TILE_TRAIL{'%' | (COLOR_CYAN << 8)};
   unsigned int score{0u};
   unsigned int turns{0u};
 
@@ -151,10 +156,16 @@ class Logic : private Display
     } catch (std::out_of_range const &) {
       auto &tile(tiles[pos]);
 
-      tile.getEntityIndex() = std::uniform_int_distribution<unsigned int>(0, 4)(rEngine) ? Tile::empty : Tile::wall;
+      tile.getEntityIndex() = std::uniform_int_distribution<unsigned int>(0, 3)(rEngine) ? Tile::empty : Tile::wall;
       switch (std::uniform_int_distribution<unsigned int>(0, 210)(rEngine)) {
-      case 5:
+      case 3:
+      	insertEntity(Entity{pos, LEAVE_TILE_TRAIL});
+	break;
+      case 4:
       	insertEntity(Entity{pos, SHOOT_AT_PLAYER});
+	break;
+      case 5:
+      	insertEntity(Entity{pos, TARGET_AT_PLAYER});
 	break;
       case 6:
       	insertEntity(Entity{pos, WILL_LAZER_AT_PLAYER});
@@ -205,7 +216,7 @@ public:
 	      if (entityIndex == Tile::empty)
 		ch = tile.prelazer ? '|' : '.';
 	      else if (entityIndex == Tile::wall)
-		ch = 'x' | (COLOR_BLUE << 8);
+		ch = 'X' | (COLOR_BLUE << 8);
 	      else
 		ch = entities[entityIndex].getSymbol();
 	      if (tile.lazer)
@@ -266,6 +277,10 @@ public:
 	  score += 100;
 	if (entities[entityIndex].symbol == LAZER_AT_PLAYER)
 	  score += 111;
+	if (entities[entityIndex].symbol == WILL_TARGET_AT_PLAYER)
+	  score += 200;
+	if (entities[entityIndex].symbol == TARGET_AT_PLAYER)
+	  score += 234;
 	if (entities[entityIndex].symbol == WILL_SHOOT_AT_PLAYER)
 	  score += 100;
 	if (entities[entityIndex].symbol == SHOOT_AT_PLAYER)
@@ -274,6 +289,8 @@ public:
 	  score += 21;
 	if (entities[entityIndex].symbol == WILL_WALK_TO_PLAYER)
 	  score += 24;
+	if (entities[entityIndex].symbol == LEAVE_TILE_TRAIL)
+	  score += 70;
       }
     getWritableTile(dest).getEntityIndex() = Tile::empty;
   }
@@ -313,6 +330,7 @@ public:
       return false;
     if (auto optional = getDir(ch))
       {
+	action(*optional);
 	if (entities.front().symbol == CHARGING_PLAYER)
 	  {
 	    insertEntity(Entity{{entities.front().pos[0] + (*optional)[0], entities.front().pos[1] + (*optional)[1]},
@@ -322,8 +340,6 @@ public:
 		    WALK_UP});
 	    entities.front().symbol = PLAYER;
 	  }
-	else
-	  action(*optional);
       }
     else if (ch == shoot_key)
       entities.front().symbol = CHARGING_PLAYER;
@@ -444,6 +460,36 @@ public:
 	    }
 	}
 	return ;
+      case WILL_TARGET_AT_PLAYER:
+	{
+	  entity.symbol = TARGET_AT_PLAYER;
+	  
+	  if (!moveTo(index, {entity.pos[0] + sign(target[0] - entity.pos[0]),
+		  entity.pos[1] + sign(target[1] - entity.pos[1])}))
+	    {
+	      if (getCloserAxis(target, entity.pos))
+		moveTo(index, {entity.pos[0] + sign(target[0] - entity.pos[0]),
+		      entity.pos[1]});
+	      else
+		moveTo(index, {entity.pos[0],
+		      entity.pos[1] + sign(target[1] - entity.pos[1])});
+		  
+	    }
+	  return ;
+	}
+      case TARGET_AT_PLAYER:
+	{
+	  entity.symbol = WILL_TARGET_AT_PLAYER;
+	  if (!getCloserAxis(target, entity.pos))
+	    {
+	      insertEntity(Entity{{entity.pos[0], entity.pos[1] + sign(target[1] - entity.pos[1])}, WALK_TO_PLAYER});
+	    }
+	  else
+	    {
+	      insertEntity(Entity{{entity.pos[0] + sign(target[0] - entity.pos[0]), entity.pos[1]}, WALK_TO_PLAYER});
+	   }
+	}
+	return ;
       case WILL_LAZER_AT_PLAYER:
 	for (int dir : std::array<int, 2u>{-1, 1u})
 	  {
@@ -486,8 +532,21 @@ public:
 	      pos[1] += dir;
 	    }
 	  killTile(pos);
-	  entity.symbol = LAZER_AT_PLAYER;	  
+	  getWritableTile(pos).prelazer = false;
+	  getWritableTile(pos).lazer = true;
+	  entity.symbol = LAZER_AT_PLAYER;
 	  entity.symbol = WILL_LAZER_AT_PLAYER;
+	}
+	return ;
+      case LEAVE_TILE_TRAIL:
+	{
+	  auto old(entity.pos);
+	  auto newPos((!getCloserAxis(target, entity.pos) || target[1] == entity.pos[1]) ?
+		      Position{entity.pos[0] + sign(target[0] - entity.pos[0]), entity.pos[1]} :
+		      Position{entity.pos[0], entity.pos[1] + sign(target[1] - entity.pos[1])});
+	  killTile(newPos);
+	  moveTo(index, newPos);
+	  getWritableTile(old).entityIndex = Tile::wall;
 	}
 	return ;
       }
