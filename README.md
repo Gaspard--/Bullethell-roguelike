@@ -8,7 +8,9 @@ Help present in game. All mobs have patterns you can learn and exploit. Success 
 
 ## Build instruction
 Requires ncurses to run + cmake to build
+
 Run cmake, run make. Game is then at the root of the repo.
+
 Ex:
 
 ```
