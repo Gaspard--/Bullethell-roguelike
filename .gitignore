@@ -27,6 +27,7 @@
 *.lib
 
 # Executables
-*.exe
-*.out
-*.app
+bullethell_roguelike
+
+# emacs backup files
+*~
